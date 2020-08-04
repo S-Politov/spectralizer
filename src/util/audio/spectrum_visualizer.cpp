@@ -24,8 +24,8 @@
 #include <numeric>
 
 namespace audio {
-spectrum_visualizer::spectrum_visualizer(source::config *cfg)
-	: audio_visualizer(cfg),
+spectrum_visualizer::spectrum_visualizer(obs_data_t *data)
+	: audio_visualizer(data),
 	  m_last_bar_count(0),
 	  m_fftw_results(0),
 	  m_fftw_input_left(nullptr),
@@ -36,7 +36,7 @@ spectrum_visualizer::spectrum_visualizer(source::config *cfg)
 	  m_fftw_plan_right(nullptr),
 	  m_silent_runs(0u)
 {
-	update();
+	update(data);
 }
 
 spectrum_visualizer::~spectrum_visualizer()
@@ -47,17 +47,94 @@ spectrum_visualizer::~spectrum_visualizer()
 	bfree(m_fftw_output_right);
 }
 
-void spectrum_visualizer::update()
+void spectrum_visualizer::update(obs_data_t *data)
 {
-	audio_visualizer::update();
+	audio_visualizer::update(data);
 	m_monstercat_smoothing_weights.clear(); /* Force recomputing of smoothing */
 
-	m_fftw_results = (size_t)m_cfg->sample_size / 2 + 1;
-	m_fftw_input_left = (double *)brealloc(m_fftw_input_left, sizeof(double) * m_cfg->sample_size);
-	m_fftw_input_right = (double *)brealloc(m_fftw_input_right, sizeof(double) * m_cfg->sample_size);
+	m_bar_height = obs_data_get_int(data, S_BAR_HEIGHT);
+	m_bar_space = obs_data_get_int(data, S_BAR_SPACE);
+	m_detail = obs_data_get_int(data, S_DETAIL);
+	m_stereo = obs_data_get_bool(data, S_STEREO);
+	m_gravity = obs_data_get_double(data, S_GRAVITY);
+	m_falloff_weight = obs_data_get_double(data, S_FALLOFF);
+	m_smoothing = (smooting_mode)obs_data_get_int(data, S_FILTER_MODE);
+	m_mcat_smoothing_factor = obs_data_get_double(data, S_FILTER_STRENGTH);
+	m_auto_scale = obs_data_get_bool(data, S_AUTO_SCALE);
+	m_scale_size = obs_data_get_double(data, S_SCALE_SIZE);
+	m_low_freq_cutoff = obs_data_get_double(data, S_LOW_FREQ_CUTOFF);
+	m_high_freq_cutoff = obs_data_get_double(data, S_HI_FREQ_CUTOFF);
+	m_stereo_space = obs_data_get_int(data, S_STEREO_SPACE);
+	m_bar_width = obs_data_get_int(data, S_BAR_WIDTH);
 
+	if (m_source) {
+		m_fftw_results = (size_t)m_source->sample_rate() / 2 + 1;
+		m_fftw_input_left = (double *)brealloc(m_fftw_input_left, sizeof(double) * m_source->sample_size());
+		m_fftw_input_right = (double *)brealloc(m_fftw_input_right, sizeof(double) * m_source->sample_size());
+	}
 	m_fftw_output_left = (fftw_complex *)brealloc(m_fftw_output_left, sizeof(fftw_complex) * m_fftw_results);
 	m_fftw_output_right = (fftw_complex *)brealloc(m_fftw_output_right, sizeof(fftw_complex) * m_fftw_results);
+}
+
+static bool filter_changed(obs_properties_t *props, obs_property_t *, obs_data_t *data)
+{
+	int mode = obs_data_get_int(data, S_FILTER_MODE);
+	auto *strength = obs_properties_get(props, S_FILTER_STRENGTH);
+	auto *sgs_pass = obs_properties_get(props, S_SGS_PASSES);
+	auto *sgs_points = obs_properties_get(props, S_SGS_POINTS);
+
+	if (mode == SM_NONE) {
+		obs_property_set_visible(strength, false);
+		obs_property_set_visible(sgs_pass, false);
+		obs_property_set_visible(sgs_points, false);
+	} else if (mode == SM_SGS) {
+		obs_property_set_visible(sgs_pass, true);
+		obs_property_set_visible(sgs_points, true);
+		obs_property_set_visible(strength, false);
+	} else if (mode == SM_MONSTERCAT) {
+		obs_property_set_visible(strength, true);
+		obs_property_set_visible(sgs_pass, false);
+		obs_property_set_visible(sgs_points, false);
+	}
+	return true;
+}
+
+static bool use_auto_scale_changed(obs_properties_t *props, obs_property_t *, obs_data_t *data)
+{
+	auto state = !obs_data_get_bool(data, S_AUTO_SCALE);
+	auto boost = obs_properties_get(props, S_SCALE_BOOST);
+	auto size = obs_properties_get(props, S_SCALE_SIZE);
+
+	obs_property_set_visible(boost, state);
+	obs_property_set_visible(size, state);
+	return true;
+}
+
+void spectrum_visualizer::properties(obs_properties_t *props)
+{
+	auto *filter =
+		obs_properties_add_list(props, S_FILTER_MODE, T_FILTER_MODE, OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
+
+	obs_property_set_modified_callback(filter, filter_changed);
+
+	obs_property_list_add_int(filter, T_FILTER_NONE, (int)SM_NONE);
+	obs_property_list_add_int(filter, T_FILTER_MONSTERCAT, (int)SM_MONSTERCAT);
+	obs_property_list_add_int(filter, T_FILTER_SGS, (int)SM_SGS);
+
+	obs_property_set_visible(obs_properties_add_float_slider(props, S_FILTER_STRENGTH, T_FILTER_STRENGTH, 1, 1.5, 0.01),
+							 false);
+	obs_property_set_visible(obs_properties_add_int(props, S_SGS_POINTS, T_SGS_POINTS, 1, 32, 1), false);
+	obs_property_set_visible(obs_properties_add_int(props, S_SGS_PASSES, T_SGS_PASSES, 1, 32, 1), false);
+
+	/* Scale stuff */
+	auto auto_scale = obs_properties_add_bool(props, S_AUTO_SCALE, T_AUTO_SCALE);
+	obs_property_set_modified_callback(auto_scale, use_auto_scale_changed);
+	obs_properties_add_float_slider(props, S_SCALE_SIZE, T_SCALE_SIZE, 0.001, 2, 0.001);
+	obs_properties_add_float_slider(props, S_SCALE_BOOST, T_SCALE_BOOST, 0.001, 100, 0.001);
+
+	/* Smoothing stuff */
+	obs_properties_add_float_slider(props, S_GRAVITY, T_GRAVITY, 0, 1, 0.01);
+	obs_properties_add_float_slider(props, S_FALLOFF, T_FALLOFF, 0, 2, 0.01);
 }
 
 void spectrum_visualizer::tick(float seconds)
@@ -73,14 +150,13 @@ void spectrum_visualizer::tick(float seconds)
 
 	audio_visualizer::tick(seconds);
 
-	const auto win_height = m_cfg->bar_height;
 	bool is_silent_left = true, is_silent_right = true;
 
-	if (m_cfg->stereo) {
-		is_silent_left = prepare_fft_input(m_cfg->buffer, m_cfg->sample_size, m_fftw_input_left, CM_LEFT);
-		is_silent_right = prepare_fft_input(m_cfg->buffer, m_cfg->sample_size, m_fftw_input_right, CM_RIGHT);
+	if (m_stereo) {
+		is_silent_left = prepare_fft_input(m_source->buffer(), m_source->sample_size(), m_fftw_input_left, CM_LEFT);
+		is_silent_right = prepare_fft_input(m_source->buffer(), m_source->sample_size(), m_fftw_input_right, CM_RIGHT);
 	} else {
-		is_silent_left = prepare_fft_input(m_cfg->buffer, m_cfg->sample_size, m_fftw_input_left, CM_LEFT);
+		is_silent_left = prepare_fft_input(m_source->buffer(), m_source->sample_size(), m_fftw_input_left, CM_LEFT);
 	}
 
 	if (!(is_silent_left && is_silent_right)) {
@@ -91,15 +167,15 @@ void spectrum_visualizer::tick(float seconds)
 
 	/* TODO make this a constant */
 	if (m_silent_runs < 30) {
-		auto height = win_height;
-		double grav = 1 - m_cfg->gravity;
-		m_fftw_plan_left = fftw_plan_dft_r2c_1d(static_cast<int>(m_cfg->sample_size), m_fftw_input_left,
-												m_fftw_output_left, FFTW_ESTIMATE);
+		auto height = m_bar_height;
+		double grav = 1 - m_gravity;
+		m_fftw_plan_left =
+			fftw_plan_dft_r2c_1d(m_source->sample_size(), m_fftw_input_left, m_fftw_output_left, FFTW_ESTIMATE);
 		if (!m_fftw_plan_left)
 			return;
-		if (m_cfg->stereo) {
-			m_fftw_plan_right = fftw_plan_dft_r2c_1d(static_cast<int>(m_cfg->sample_size), m_fftw_input_right,
-													 m_fftw_output_right, FFTW_ESTIMATE);
+		if (m_stereo) {
+			m_fftw_plan_right =
+				fftw_plan_dft_r2c_1d(m_source->sample_size(), m_fftw_input_right, m_fftw_output_right, FFTW_ESTIMATE);
 			if (!m_fftw_plan_right) {
 				fftw_destroy_plan(m_fftw_plan_left);
 				return;
@@ -110,25 +186,25 @@ void spectrum_visualizer::tick(float seconds)
 
 		fftw_execute(m_fftw_plan_left);
 
-		create_spectrum_bars(m_fftw_output_left, m_fftw_results, height, m_cfg->detail + DEAD_BAR_OFFSET,
-							 &m_bars_left_new, &m_bars_falloff_left);
-		if (m_cfg->stereo) {
-			create_spectrum_bars(m_fftw_output_right, m_fftw_results, height, m_cfg->detail + DEAD_BAR_OFFSET,
+		create_spectrum_bars(m_fftw_output_left, m_fftw_results, height, m_detail + DEAD_BAR_OFFSET, &m_bars_left_new,
+							 &m_bars_falloff_left);
+		if (m_stereo) {
+			create_spectrum_bars(m_fftw_output_right, m_fftw_results, height, m_detail + DEAD_BAR_OFFSET,
 								 &m_bars_right_new, &m_bars_falloff_right);
 
 			m_bars_right.resize(m_bars_right_new.size(), 0.0);
 			for (size_t i = 0; i < m_bars_right.size(); i++) {
-				m_bars_right[i] = m_bars_right[i] * m_cfg->gravity + m_bars_right_new[i] * grav;
+				m_bars_right[i] = m_bars_right[i] * m_gravity + m_bars_right_new[i] * grav;
 			}
 		}
 
 		m_bars_left.resize(m_bars_left_new.size(), 0.0);
 		for (size_t i = 0; i < m_bars_left.size(); i++) {
-			m_bars_left[i] = m_bars_left[i] * m_cfg->gravity + m_bars_left_new[i] * grav;
+			m_bars_left[i] = m_bars_left[i] * m_gravity + m_bars_left_new[i] * grav;
 		}
 
 		fftw_destroy_plan(m_fftw_plan_left);
-		if (m_cfg->stereo)
+		if (m_stereo)
 			fftw_destroy_plan(m_fftw_plan_right);
 	} else {
 		m_sleeping = true;
@@ -162,7 +238,7 @@ bool spectrum_visualizer::prepare_fft_input(pcm_stereo_sample *buffer, uint32_t 
 
 void spectrum_visualizer::smooth_bars(doublev *bars)
 {
-	switch (m_cfg->smoothing) {
+	switch (m_smoothing) {
 	case SM_MONSTERCAT:
 		monstercat_smoothing(bars);
 		break;
@@ -177,11 +253,8 @@ void spectrum_visualizer::sgs_smoothing(doublev *bars)
 {
 	auto original_bars = *bars;
 
-	auto smoothing_passes = m_cfg->sgs_passes;
-	auto smoothing_points = m_cfg->sgs_points;
-
-	for (auto pass = 0u; pass < smoothing_passes; ++pass) {
-		auto pivot = static_cast<uint32_t>(std::floor(smoothing_points / 2.0));
+	for (auto pass = 0; pass < m_sgs_passes; ++pass) {
+		auto pivot = static_cast<uint32_t>(std::floor(m_sgs_points / 2.0));
 
 		for (auto i = 0u; i < pivot; ++i) {
 			(*bars)[i] = original_bars[i];
@@ -198,7 +271,7 @@ void spectrum_visualizer::sgs_smoothing(doublev *bars)
 		}
 
 		// prepare for next pass
-		if (pass < (smoothing_passes - 1)) {
+		if (pass < (m_sgs_passes - 1)) {
 			original_bars = *bars;
 		}
 	}
@@ -213,7 +286,7 @@ void spectrum_visualizer::monstercat_smoothing(doublev *bars)
 	if (m_monstercat_smoothing_weights.size() != bars->size()) {
 		m_monstercat_smoothing_weights.resize(bars->size());
 		for (auto i = 0u; i < bars->size(); ++i) {
-			m_monstercat_smoothing_weights[i] = std::pow(m_cfg->mcat_smoothing_factor, i);
+			m_monstercat_smoothing_weights[i] = std::pow(m_mcat_smoothing_factor, i);
 		}
 	}
 
@@ -223,8 +296,8 @@ void spectrum_visualizer::monstercat_smoothing(doublev *bars)
 	for (auto i = 1l; i < bars_length; ++i) {
 		auto outer_index = static_cast<size_t>(i);
 
-		if ((*bars)[outer_index] < m_cfg->bar_min_height) {
-			(*bars)[outer_index] = m_cfg->bar_min_height;
+		if ((*bars)[outer_index] < m_bar_min_height) {
+			(*bars)[outer_index] = m_bar_min_height;
 		} else {
 			for (int64_t j = 0; j < bars_length; ++j) {
 				if (i != j) {
@@ -255,7 +328,7 @@ void spectrum_visualizer::apply_falloff(const doublev &bars, doublev *falloff_ba
 
 	for (auto i = 0u; i < bars.size(); ++i) {
 		// falloff should always by at least one
-		auto falloff_value = std::min((*falloff_bars)[i] * m_cfg->falloff_weight, (*falloff_bars)[i] - 1);
+		auto falloff_value = std::min((*falloff_bars)[i] * m_falloff_weight, (*falloff_bars)[i] - 1);
 
 		(*falloff_bars)[i] = std::max(falloff_value, bars[i]);
 	}
@@ -282,12 +355,13 @@ void spectrum_visualizer::scale_bars(int32_t height, doublev *bars)
 	if (bars->empty())
 		return;
 
-	if (m_cfg->use_auto_scale) {
+	if (m_auto_scale) {
 		const auto max_height_iter = std::max_element(bars->begin(), bars->end());
 
 		// max number of elements to calculate for moving average
 		const auto max_number_of_elements = static_cast<size_t>(
-			((constants::auto_scale_span * m_cfg->sample_rate) / (static_cast<double>(m_cfg->sample_size))) * 2.0);
+			((constants::auto_scale_span * m_source->sample_rate()) / (static_cast<double>(m_source->sample_size()))) *
+			2.0);
 
 		double std_dev = 0.0;
 		double moving_average = 0.0;
@@ -307,10 +381,8 @@ void spectrum_visualizer::scale_bars(int32_t height, doublev *bars)
 			bar = std::min(static_cast<double>(height - 1), ((bar / max_height) * height) - 1);
 		}
 	} else {
-		for (double &bar : *bars) {
-			bar *= m_cfg->scale_size;
-			bar += m_cfg->scale_boost;
-		}
+		for (double &bar : *bars)
+			bar *= m_scale_size;
 	}
 }
 
@@ -368,8 +440,7 @@ void spectrum_visualizer::create_spectrum_bars(fftw_complex *fftw_output, size_t
 void spectrum_visualizer::recalculate_cutoff_frequencies(uint32_t number_of_bars, uint32v *low_cutoff_frequencies,
 														 uint32v *high_cutoff_frequencies, doublev *freqconst_per_bin)
 {
-	auto freq_const =
-		std::log10((m_cfg->low_cutoff_freq / m_cfg->high_cutoff_freq)) / ((1.0 / number_of_bars + 1.0) - 1.0);
+	auto freq_const = std::log10((m_low_freq_cutoff / m_high_freq_cutoff)) / ((1.0 / number_of_bars + 1.0) - 1.0);
 
 	(*low_cutoff_frequencies) = std::vector<uint32_t>(number_of_bars + 1);
 	(*high_cutoff_frequencies) = std::vector<uint32_t>(number_of_bars + 1);
@@ -377,13 +448,13 @@ void spectrum_visualizer::recalculate_cutoff_frequencies(uint32_t number_of_bars
 
 	for (auto i = 0u; i <= number_of_bars; i++) {
 		(*freqconst_per_bin)[i] =
-			static_cast<double>(m_cfg->high_cutoff_freq) *
+			static_cast<double>(m_high_freq_cutoff) *
 			std::pow(10.0, (freq_const * -1) + (((i + 1.0) / (number_of_bars + 1.0)) * freq_const));
 
-		auto frequency = (*freqconst_per_bin)[i] / (m_cfg->sample_rate / 2.0);
+		auto frequency = (*freqconst_per_bin)[i] / (m_source->sample_rate() / 2.0);
 
 		(*low_cutoff_frequencies)[i] =
-			static_cast<uint32_t>(std::floor(frequency * static_cast<double>(m_cfg->sample_size) / 4.0));
+			static_cast<uint32_t>(std::floor(frequency * static_cast<double>(m_source->sample_size()) / 4.0));
 
 		if (i > 0) {
 			if ((*low_cutoff_frequencies)[i] <= (*low_cutoff_frequencies)[i - 1]) {

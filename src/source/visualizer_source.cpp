@@ -23,14 +23,6 @@
 
 namespace source {
 
-static auto fifo_filter = "Fifo file(*.fifo);;"
-						  "All Files (*.*)";
-
-struct enum_data {
-	visualizer_source *vis;
-	obs_property *list;
-};
-
 visualizer_source::visualizer_source(obs_source_t *source, obs_data_t *settings)
 {
 	m_config.settings = settings;
@@ -57,63 +49,38 @@ void visualizer_source::update(obs_data_t *settings)
 	visual_mode old_mode = m_config.visual;
 
 	m_config.value_mutex.lock();
-	m_config.audio_source_name = obs_data_get_string(settings, S_AUDIO_SOURCE);
-	m_config.sample_rate = obs_data_get_int(settings, S_SAMPLE_RATE);
-	m_config.sample_size = m_config.sample_rate / m_config.fps;
 	m_config.visual = (visual_mode)(obs_data_get_int(settings, S_SOURCE_MODE));
-	m_config.stereo = obs_data_get_bool(settings, S_STEREO);
-	m_config.stereo_space = obs_data_get_int(settings, S_STEREO_SPACE);
 	m_config.color = obs_data_get_int(settings, S_COLOR);
-	m_config.bar_width = obs_data_get_int(settings, S_BAR_WIDTH);
-	m_config.bar_space = obs_data_get_int(settings, S_BAR_SPACE);
-	m_config.detail = obs_data_get_int(settings, S_DETAIL);
 	m_config.fifo_path = obs_data_get_string(settings, S_FIFO_PATH);
 	m_config.bar_height = obs_data_get_int(settings, S_BAR_HEIGHT);
-	m_config.smoothing = (smooting_mode)obs_data_get_int(settings, S_FILTER_MODE);
-	m_config.sgs_passes = obs_data_get_int(settings, S_SGS_PASSES);
-	m_config.sgs_points = obs_data_get_int(settings, S_SGS_POINTS);
-	m_config.falloff_weight = obs_data_get_double(settings, S_FALLOFF);
-	m_config.gravity = obs_data_get_double(settings, S_GRAVITY);
-	m_config.mcat_smoothing_factor = obs_data_get_double(settings, S_FILTER_STRENGTH);
 	m_config.cx = UTIL_MAX(m_config.detail * (m_config.bar_width + m_config.bar_space) - m_config.bar_space, 10);
 	m_config.cy = UTIL_MAX(m_config.bar_height + (m_config.stereo ? m_config.stereo_space : 0), 10);
-	m_config.use_auto_scale = obs_data_get_bool(settings, S_AUTO_SCALE);
-	m_config.scale_boost = obs_data_get_double(settings, S_SCALE_BOOST);
-	m_config.scale_size = obs_data_get_double(settings, S_SCALE_SIZE);
-	m_config.wire_mode = (wire_mode)obs_data_get_int(settings, S_WIRE_MODE);
-	m_config.wire_thickness = obs_data_get_int(settings, S_WIRE_THICKNESS);
 
-#ifdef LINUX
-	m_config.auto_clear = obs_data_get_bool(settings, S_AUTO_CLEAR);
+	//#ifdef LINUX
+	//    m_config.auto_clear = obs_data_get_bool(settings, S_AUTO_CLEAR);
 
-	struct obs_video_info ovi;
-	if (obs_get_video_info(&ovi)) {
-		m_config.fps = ovi.fps_num;
-	} else {
-		m_config.fps = 30;
-		warn("Couldn't determine fps, mpd fifo might not work as intended!");
-	}
-#endif
-
-	if (m_visualizer) /* this modifies sample size, if an internal audio source is used */
-		m_visualizer->update();
-
-	if (m_config.buffer)
-		bfree(m_config.buffer);
-
-	m_config.buffer = static_cast<pcm_stereo_sample *>(bzalloc(m_config.sample_size * sizeof(pcm_stereo_sample)));
+	//    struct obs_video_info ovi;
+	//    if (obs_get_video_info(&ovi)) {
+	//        m_config.fps = ovi.fps_num;
+	//    } else {
+	//        m_config.fps = 30;
+	//        warn("Couldn't determine fps, mpd fifo might not work as intended!");
+	//    }
+	//#endif
 
 	if (old_mode != m_config.visual || !m_visualizer) {
 		delete m_visualizer;
 
 		switch (m_config.visual) {
 		case VM_BARS:
-			m_visualizer = new audio::bar_visualizer(&m_config);
+			m_visualizer = new audio::bar_visualizer(settings);
 			break;
 		case VM_WIRE:
-			m_visualizer = new audio::wire_visualizer(&m_config);
+			m_visualizer = new audio::wire_visualizer(settings);
 			break;
 		}
+	} else if (m_visualizer) {
+		m_visualizer->update(settings);
 	}
 
 	m_config.value_mutex.unlock();
@@ -153,58 +120,7 @@ void visualizer_source::render(gs_effect_t *effect)
 	}
 }
 
-static bool filter_changed(obs_properties_t *props, obs_property_t *p, obs_data_t *data)
-{
-	int mode = obs_data_get_int(data, S_FILTER_MODE);
-	auto *strength = obs_properties_get(props, S_FILTER_STRENGTH);
-	auto *sgs_pass = obs_properties_get(props, S_SGS_PASSES);
-	auto *sgs_points = obs_properties_get(props, S_SGS_POINTS);
-
-	if (mode == SM_NONE) {
-		obs_property_set_visible(strength, false);
-		obs_property_set_visible(sgs_pass, false);
-		obs_property_set_visible(sgs_points, false);
-	} else if (mode == SM_SGS) {
-		obs_property_set_visible(sgs_pass, true);
-		obs_property_set_visible(sgs_points, true);
-		obs_property_set_visible(strength, false);
-	} else if (mode == SM_MONSTERCAT) {
-		obs_property_set_visible(strength, true);
-		obs_property_set_visible(sgs_pass, false);
-		obs_property_set_visible(sgs_points, false);
-	}
-	return true;
-}
-
-static bool use_auto_scale_changed(obs_properties_t *props, obs_property_t *p, obs_data_t *data)
-{
-	auto state = !obs_data_get_bool(data, S_AUTO_SCALE);
-	auto boost = obs_properties_get(props, S_SCALE_BOOST);
-	auto size = obs_properties_get(props, S_SCALE_SIZE);
-
-	obs_property_set_visible(boost, state);
-	obs_property_set_visible(size, state);
-	return true;
-}
-
-static bool source_changed(obs_properties_t *props, obs_property_t *p, obs_data_t *data)
-{
-	auto *id = obs_data_get_string(data, S_AUDIO_SOURCE);
-	auto *sr = obs_properties_get(props, S_SAMPLE_RATE);
-	obs_property_t *fifo = nullptr;
-#ifdef LINUX
-	fifo = obs_properties_get(props, S_FIFO_PATH);
-#endif
-	if (strcmp(id, "mpd") == 0) {
-		obs_property_set_visible(sr, true);
-		if (fifo) {
-			obs_property_set_visible(fifo, true);
-		}
-	}
-	return true;
-}
-
-static bool stereo_changed(obs_properties_t *props, obs_property_t *p, obs_data_t *data)
+static bool stereo_changed(obs_properties_t *props, obs_property_t *, obs_data_t *data)
 {
 	auto stereo = obs_data_get_bool(data, S_STEREO);
 	auto *space = obs_properties_get(props, S_STEREO_SPACE);
@@ -212,7 +128,7 @@ static bool stereo_changed(obs_properties_t *props, obs_property_t *p, obs_data_
 	return true;
 }
 
-static bool visual_mode_changed(obs_properties_t *props, obs_property_t *p, obs_data_t *data)
+static bool visual_mode_changed(obs_properties_t *props, obs_property_t *, obs_data_t *data)
 {
 	visual_mode vm = (visual_mode)obs_data_get_int(data, S_SOURCE_MODE);
 	auto *wire_mode = obs_properties_get(props, S_WIRE_MODE);
@@ -227,26 +143,6 @@ static bool visual_mode_changed(obs_properties_t *props, obs_property_t *p, obs_
 	return true;
 }
 
-static bool wire_mode_changed(obs_properties_t *props, obs_property_t *p, obs_data_t *data)
-{
-	wire_mode wm = (wire_mode)obs_data_get_int(data, S_WIRE_MODE);
-	auto *wire_thickness = obs_properties_get(props, S_WIRE_THICKNESS);
-	obs_property_set_visible(wire_thickness, wm == WM_THICK);
-	return true;
-}
-
-static bool add_source(void *data, obs_source_t *src)
-{
-	uint32_t caps = obs_source_get_output_flags(src);
-	enum_data *d = (enum_data *)data;
-
-	if ((caps & OBS_SOURCE_AUDIO) == 0)
-		return true;
-	const char *name = obs_source_get_name(src);
-	obs_property_list_add_string(d->list, name, name);
-	return true;
-}
-
 obs_properties_t *get_properties_for_visualiser(void *data)
 {
 	UNUSED_PARAMETER(data);
@@ -258,69 +154,6 @@ obs_properties_t *get_properties_for_visualiser(void *data)
 	obs_property_list_add_int(mode, T_MODE_WIRE, (int)VM_WIRE);
 	obs_property_set_modified_callback(mode, visual_mode_changed);
 
-	auto *src =
-		obs_properties_add_list(props, S_AUDIO_SOURCE, T_AUDIO_SOURCE, OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
-	auto *filter =
-		obs_properties_add_list(props, S_FILTER_MODE, T_FILTER_MODE, OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
-
-	obs_property_set_modified_callback(filter, filter_changed);
-	obs_property_set_modified_callback(src, source_changed);
-
-	obs_property_list_add_int(filter, T_FILTER_NONE, (int)SM_NONE);
-	obs_property_list_add_int(filter, T_FILTER_MONSTERCAT, (int)SM_MONSTERCAT);
-	obs_property_list_add_int(filter, T_FILTER_SGS, (int)SM_SGS);
-
-	obs_property_set_visible(obs_properties_add_float_slider(props, S_FILTER_STRENGTH, T_FILTER_STRENGTH, 1, 1.5, 0.01),
-							 false);
-	obs_property_set_visible(obs_properties_add_int(props, S_SGS_POINTS, T_SGS_POINTS, 1, 32, 1), false);
-	obs_property_set_visible(obs_properties_add_int(props, S_SGS_PASSES, T_SGS_PASSES, 1, 32, 1), false);
-
-	obs_properties_add_color(props, S_COLOR, T_COLOR);
-
-	/* Bar settings */
-	auto *w = obs_properties_add_int(props, S_BAR_WIDTH, T_BAR_WIDTH, 1, UINT16_MAX, 1);
-	auto *h = obs_properties_add_int(props, S_BAR_HEIGHT, T_BAR_HEIGHT, 10, UINT16_MAX, 1);
-	auto *s = obs_properties_add_int(props, S_BAR_SPACE, T_BAR_SPACING, 0, UINT16_MAX, 1);
-	auto *sr = obs_properties_add_int(props, S_SAMPLE_RATE, T_SAMPLE_RATE, 128, UINT16_MAX, 10);
-	obs_property_int_set_suffix(sr, " Hz");
-	obs_property_int_set_suffix(w, " Pixel");
-	obs_property_int_set_suffix(h, " Pixel");
-	obs_property_int_set_suffix(s, " Pixel");
-
-	obs_property_set_visible(sr, false); /* Sampel rate is only needed for fifo */
-
-	/* Wire settings */
-	auto *wm = obs_properties_add_list(props, S_WIRE_MODE, T_WIRE_MODE, OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
-	auto *th = obs_properties_add_int(props, S_WIRE_THICKNESS, T_WIRE_THICKNESS, 2, 0xffff, 1);
-	obs_property_int_set_suffix(th, " Pixel");
-
-	obs_property_list_add_int(wm, T_WIRE_MODE_THIN, WM_THIN);
-	obs_property_list_add_int(wm, T_WIRE_MODE_THICK, WM_THICK);
-	obs_property_list_add_int(wm, T_WIRE_MODE_FILL, WM_FILL);
-	obs_property_list_add_int(wm, T_WIRE_MODE_FILL_INVERTED, WM_FILL_INVERTED);
-	obs_property_set_visible(wm, false);
-	obs_property_set_visible(th, false);
-	obs_property_set_modified_callback(wm, wire_mode_changed);
-
-	/* Scale stuff */
-	auto auto_scale = obs_properties_add_bool(props, S_AUTO_SCALE, T_AUTO_SCALE);
-	obs_property_set_modified_callback(auto_scale, use_auto_scale_changed);
-	obs_properties_add_float_slider(props, S_SCALE_SIZE, T_SCALE_SIZE, 0.001, 2, 0.001);
-	obs_properties_add_float_slider(props, S_SCALE_BOOST, T_SCALE_BOOST, 0.001, 100, 0.001);
-
-	/* Smoothing stuff */
-	obs_properties_add_float_slider(props, S_GRAVITY, T_GRAVITY, 0, 1, 0.01);
-	obs_properties_add_float_slider(props, S_FALLOFF, T_FALLOFF, 0, 2, 0.01);
-
-	obs_property_list_add_string(src, T_AUDIO_SOURCE_NONE, defaults::audio_source);
-#ifdef LINUX
-	/* Add MPD stuff */
-	obs_property_list_add_string(src, T_SOURCE_MPD, "mpd");
-	auto *path = obs_properties_add_path(props, S_FIFO_PATH, T_FIFO_PATH, OBS_PATH_FILE, fifo_filter, "");
-	obs_property_set_visible(path, false);
-	obs_properties_add_bool(props, S_AUTO_CLEAR, T_AUTO_CLEAR);
-#endif
-
 	auto *stereo = obs_properties_add_bool(props, S_STEREO, T_STEREO);
 	auto *space = obs_properties_add_int(props, S_STEREO_SPACE, T_STEREO_SPACE, 0, UINT16_MAX, 1);
 	obs_property_int_set_suffix(space, " Pixel");
@@ -329,10 +162,6 @@ obs_properties_t *get_properties_for_visualiser(void *data)
 	obs_property_set_visible(space, false);
 	obs_property_set_modified_callback(stereo, stereo_changed);
 
-	enum_data d;
-	d.list = src;
-	d.vis = reinterpret_cast<visualizer_source *>(data);
-	obs_enum_sources(add_source, &d);
 	return props;
 }
 

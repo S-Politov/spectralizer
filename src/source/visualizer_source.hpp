@@ -38,22 +38,9 @@ struct config {
 	uint16_t fps = defaults::fps;
 
 	/* Audio settings */
-	uint32_t sample_rate = defaults::sample_rate;
-	uint32_t sample_size = defaults::sample_size;
 
-	std::string audio_source_name = "";
 	double low_cutoff_freq = defaults::lfreq_cut;
 	double high_cutoff_freq = defaults::hfreq_cut;
-
-	/* smoothing */
-	uint32_t sgs_points = defaults::sgs_points, sgs_passes = defaults::sgs_passes;
-
-	/* scaling */
-	bool use_auto_scale = defaults::use_auto_scale;
-	double scale_boost = defaults::scale_boost;
-	double scale_size = defaults::scale_size;
-
-	double mcat_smoothing_factor = defaults::mcat_smooth;
 
 	/* Bar visualizer settings */
 	uint16_t bar_space = defaults::bar_space;

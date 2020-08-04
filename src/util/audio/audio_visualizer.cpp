@@ -24,31 +24,42 @@
 
 namespace audio {
 
-audio_visualizer::audio_visualizer(source::config *cfg)
+audio_visualizer::audio_visualizer(obs_data_t *data)
 {
-	m_cfg = cfg;
+	update(data);
 }
 
 audio_visualizer::~audio_visualizer()
 {
-	delete m_source;
+	free_audio_source();
+}
+
+void audio_visualizer::free_audio_source()
+{
+	if (m_source.use_count() > 1) {
+		warn("Audio source '%s' is still in use (%li references)", m_source_id.c_str(), m_source.use_count());
+	}
 	m_source = nullptr;
 }
 
-void audio_visualizer::update()
+void audio_visualizer::update(obs_data_t *data)
 {
 	if (m_source)
-		m_source->update();
-	if (!m_source || m_cfg->audio_source_name != m_source_id) {
-		m_source_id = m_cfg->audio_source_name;
+		m_source->update(data);
+
+	auto *new_id = obs_data_get_string(data, S_AUDIO_SOURCE);
+
+	if (!m_source || new_id != m_source_id) {
+		m_source_id = new_id;
 		if (m_source)
-			delete m_source;
-		if (m_cfg->audio_source_name.empty() || m_cfg->audio_source_name == std::string(defaults::audio_source)) {
-			m_source = nullptr;
-		} else if (m_cfg->audio_source_name == std::string("mpd")) {
-			m_source = new fifo(m_cfg);
+			free_audio_source();
+
+		if (m_source_id.empty() || m_source_id == defaults::audio_source) {
+			free_audio_source();
+		} else if (m_source_id == "mpd") {
+			m_source = make_shared<fifo>(data);
 		} else {
-			m_source = new obs_internal_source(m_cfg);
+			m_source = make_shared<obs_internal_source>(data);
 		}
 	}
 }
@@ -61,10 +72,10 @@ void audio_visualizer::tick(float seconds)
 		m_data_read = false;
 
 #ifdef LINUX
-	if (m_cfg->auto_clear && !m_data_read) {
-		/* Clear buffer */
-		memset(m_cfg->buffer, 0, m_cfg->sample_size * sizeof(pcm_stereo_sample));
-	}
+//    if (m_cfg->auto_clear && !m_data_read) {
+//        /* Clear buffer */
+//        memset(m_cfg->buffer, 0, m_cfg->sample_size * sizeof(pcm_stereo_sample));
+//    }
 #endif
 }
 }

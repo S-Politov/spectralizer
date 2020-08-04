@@ -21,8 +21,11 @@
 
 namespace audio {
 class bar_visualizer : public spectrum_visualizer {
+	int m_bar_width;
+
 public:
-	explicit bar_visualizer(source::config *cfg);
-	void render(gs_effect_t *effect) override;
+	explicit bar_visualizer(obs_data_t *);
+	void render(gs_effect_t *) override;
+	void properties(obs_properties_t *) override;
 };
 }

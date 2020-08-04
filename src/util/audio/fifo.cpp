@@ -28,9 +28,9 @@
 
 namespace audio {
 
-fifo::fifo(source::config *cfg) : audio_source(cfg)
+fifo::fifo(obs_data_t *cfg) : audio_source(cfg)
 {
-	update();
+	update(cfg);
 }
 
 fifo::~fifo()
@@ -40,24 +40,25 @@ fifo::~fifo()
 	m_fifo_fd = 0;
 }
 
-void fifo::update()
+void fifo::update(obs_data_t *data)
 {
-	m_file_path = m_cfg->fifo_path;
+	audio_source::update(data);
+	m_file_path = obs_data_get_string(data, S_FIFO_PATH);
 	open_fifo();
 }
 
-bool fifo::tick(float seconds)
+bool fifo::tick(float)
 {
 	if (m_fifo_fd < 0 && !open_fifo())
 		return false;
 
-	auto buffer_size_bytes = static_cast<size_t>(sizeof(pcm_stereo_sample) * m_cfg->sample_size);
+	auto buffer_size_bytes = static_cast<size_t>(sizeof(pcm_stereo_sample) * m_sample_size);
 	size_t bytes_left = buffer_size_bytes;
 	auto attempts = 0;
-	memset(m_cfg->buffer, 0, buffer_size_bytes);
+	memset(m_buffer, 0, buffer_size_bytes);
 
 	while (bytes_left > 0) {
-		int64_t bytes_read = read(m_fifo_fd, m_cfg->buffer, bytes_left);
+		int64_t bytes_read = read(m_fifo_fd, m_buffer, bytes_left);
 
 		if (bytes_read == 0) {
 			debug("Could not read any bytes");
@@ -65,10 +66,10 @@ bool fifo::tick(float seconds)
 		} else if (bytes_read == -1) {
 			if (errno == EAGAIN) {
 				if (attempts > MAX_READ_ATTEMPTS) {
-					debug("Couldn't finish reading buffer, bytes read: %d,"
-						  "buffer size: %d",
+					debug("Couldn't finish reading buffer, bytes read: %li,"
+						  "buffer size: %li",
 						  bytes_read, buffer_size_bytes);
-					memset(m_cfg->buffer, 0, buffer_size_bytes);
+					memset(m_buffer, 0, buffer_size_bytes);
 					close(m_fifo_fd);
 					m_fifo_fd = -1;
 					return false;

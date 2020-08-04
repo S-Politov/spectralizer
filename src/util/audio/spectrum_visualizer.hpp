@@ -31,9 +31,25 @@ using uint32v = std::vector<uint32_t>;
 namespace audio {
 
 class spectrum_visualizer : public audio_visualizer {
+protected:
 	uint32_t m_last_bar_count;
-	bool m_sleeping = false;
+	bool m_sleeping = false, m_stereo = false, m_auto_scale = false;
 	float m_sleep_count = 0.f;
+	double m_gravity;
+	double m_falloff_weight;
+	double m_scale_size;
+	double m_low_freq_cutoff, m_high_freq_cutoff;
+	smooting_mode m_smoothing;
+	float m_mcat_smoothing_factor;
+	int m_sgs_passes;
+	int m_sgs_points;
+	int m_bar_min_height;
+	size_t m_detail;
+	int m_bar_height;
+	int m_bar_space;
+	int m_stereo_space;
+	int m_bar_width;
+
 	/* fft calculation vars */
 	size_t m_fftw_results;
 	double *m_fftw_input_left;
@@ -73,7 +89,6 @@ class spectrum_visualizer : public audio_visualizer {
 	void sgs_smoothing(doublev *bars);
 	void monstercat_smoothing(doublev *bars);
 
-protected:
 	/* New values are smoothly copied over if smoothing is used
      * otherwise they're directly copied */
 	doublev m_bars_left, m_bars_right, m_bars_left_new, m_bars_right_new;
@@ -82,13 +97,15 @@ protected:
 	doublev m_monstercat_smoothing_weights;
 
 public:
-	explicit spectrum_visualizer(source::config *cfg);
+	explicit spectrum_visualizer(obs_data_t *);
 
 	~spectrum_visualizer() override;
 
-	void update() override;
+	void update(obs_data_t *) override;
 
-	void tick(float seconds) override;
+	void tick(float) override;
+
+	void properties(obs_properties_t *) override;
 };
 
 }

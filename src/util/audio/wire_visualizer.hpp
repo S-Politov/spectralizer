@@ -25,10 +25,14 @@ class wire_visualizer : public spectrum_visualizer {
 	gs_vertbuffer_t *make_thick(channel_mode cm);
 	gs_vertbuffer_t *make_filled(channel_mode cm);
 	gs_vertbuffer_t *make_filled_inverted(channel_mode cm);
+	int m_wire_thickness;
+	wire_mode m_wire_mode;
 
 public:
-	explicit wire_visualizer(source::config *cfg);
+	explicit wire_visualizer(obs_data_t *);
 
-	void render(gs_effect_t *e) override;
+	void render(gs_effect_t *) override;
+	void update(obs_data_t *) override;
+	void properties(obs_properties_t *) override;
 };
 }

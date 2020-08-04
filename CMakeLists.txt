@@ -24,7 +24,10 @@ set(spectralizer_SOURCES
         src/util/audio/obs_internal_source.hpp
         src/util/audio/audio_visualizer.cpp
         src/util/audio/audio_visualizer.hpp
-        src/util/audio/audio_source.hpp)
+        src/util/audio/audio_source.cpp
+        src/util/audio/audio_source.hpp
+        src/util/audio/bar.cpp
+        src/util/audio/bar.hpp)
 
 add_library(spectralizer MODULE
         ${spectralizer_SOURCES})

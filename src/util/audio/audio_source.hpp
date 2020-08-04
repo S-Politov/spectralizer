@@ -19,6 +19,9 @@
 #pragma once
 
 #define BUFFER_SIZE 1024
+#include <string>
+#include <obs-module.h>
+#include "../../util/util.hpp"
 
 namespace source {
 struct config;
@@ -28,15 +31,30 @@ namespace audio {
 /* Base class for audio reading */
 class audio_source {
 protected:
-	source::config *m_cfg;
+	std::string m_source_id;
+	pcm_stereo_sample *m_buffer = nullptr;
+	long long m_sample_size;
+	long long m_sample_rate;
 
 public:
-	explicit audio_source(source::config *cfg) : m_cfg(cfg) {}
+	explicit audio_source(obs_data_t *data) { update(data); }
 
-	virtual ~audio_source() {}
+	virtual ~audio_source()
+	{
+		if (m_buffer)
+			bfree(m_buffer);
+		m_buffer = nullptr;
+	}
 
 	/* obs_source methods */
-	virtual void update() = 0;
+	virtual void update(obs_data_t *);
+	long long sample_size() const { return m_sample_size; }
+	long long sample_rate() const { return m_sample_rate; }
+
 	virtual bool tick(float seconds) = 0;
+	virtual void resize_buffer();
+	virtual void source_changed() = 0;
+	virtual void properties(obs_properties_t *props);
+	pcm_stereo_sample *buffer() { return m_buffer; }
 };
 }

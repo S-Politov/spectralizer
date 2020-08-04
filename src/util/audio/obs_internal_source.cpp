@@ -32,11 +32,11 @@ static void audio_capture(void *param, obs_source_t *src, const struct audio_dat
 		s->capture(src, data, muted);
 }
 
-obs_internal_source::obs_internal_source(source::config *cfg) : audio_source(cfg)
+obs_internal_source::obs_internal_source(obs_data_t *d) : audio_source(d)
 {
 	circlebuf_init(&m_audio_data[0]);
 	circlebuf_init(&m_audio_data[1]);
-	update();
+	update(d);
 }
 
 obs_internal_source::~obs_internal_source()
@@ -57,10 +57,8 @@ obs_internal_source::~obs_internal_source()
 	}
 }
 
-void obs_internal_source::capture(obs_source_t *src, const struct audio_data *data, bool muted)
+void obs_internal_source::capture(obs_source_t *, const struct audio_data *data, bool muted)
 {
-	m_cfg->value_mutex.lock();
-
 	if (m_max_capture_frames < data->frames)
 		m_max_capture_frames = data->frames;
 
@@ -83,18 +81,12 @@ void obs_internal_source::capture(obs_source_t *src, const struct audio_data *da
 			}
 		}
 	}
-
-#ifdef LINUX
-	if (m_cfg->auto_clear)
-		m_last_capture = os_gettime_ns();
-#endif
-	m_cfg->value_mutex.unlock();
 }
 
-bool obs_internal_source::tick(float seconds)
+bool obs_internal_source::tick(float)
 {
 	/* Audio capturing is done in separate callback
-     * and is technically only done, once the circle buffer is
+     * and is technically only finished, once the circle buffer is
      * filled, but we'll just assume that's always the case */
 
 	/* Update / refresh audio capturing */
@@ -151,9 +143,9 @@ bool obs_internal_source::tick(float seconds)
 
 			for (uint32_t i = 0; i < m_audio_buf_len; i++) {
 				if (chan == 0) {
-					m_cfg->buffer[i].l = static_cast<int16_t>(m_audio_buf[chan][i] * (UINT16_MAX / 2));
+					m_buffer[i].l = static_cast<int16_t>(m_audio_buf[chan][i] * (UINT16_MAX / 2));
 				} else {
-					m_cfg->buffer[i].r = static_cast<int16_t>(m_audio_buf[chan][i] * (UINT16_MAX / 2));
+					m_buffer[i].r = static_cast<int16_t>(m_audio_buf[chan][i] * (UINT16_MAX / 2));
 				}
 			}
 		}
@@ -162,39 +154,25 @@ bool obs_internal_source::tick(float seconds)
 	return true;
 }
 
-void obs_internal_source::resize_audio_buf(size_t new_len)
+void obs_internal_source::resize_buffer()
 {
-	m_audio_buf_len = new_len;
-	m_audio_buf[0] = static_cast<float *>(brealloc(m_audio_buf[0], new_len * sizeof(float)));
-	m_audio_buf[1] = static_cast<float *>(brealloc(m_audio_buf[1], new_len * sizeof(float)));
+	m_audio_buf[0] = static_cast<float *>(brealloc(m_audio_buf[0], m_sample_size * sizeof(float)));
+	m_audio_buf[1] = static_cast<float *>(brealloc(m_audio_buf[1], m_sample_size * sizeof(float)));
 }
 
-void obs_internal_source::update()
+void obs_internal_source::source_changed()
 {
-	m_cfg->sample_rate = audio_output_get_sample_rate(obs_get_audio());
-	/* Usually the frame rate is used as a divisor, but
-     * it seems that rates below 60 result in a sample size that's too large
-     * and therefore will break the visualizer so I'll just use 60 as a constant here
-     */
-	m_cfg->sample_size = m_cfg->sample_rate / 60;
-	m_num_channels = audio_output_get_channels(obs_get_audio());
 	obs_weak_source_t *old = nullptr;
 
-	if (m_cfg->audio_source_name.empty()) {
+	if (m_source_id.empty() && m_capture_source) {
+		old = m_capture_source;
+		m_capture_source = nullptr;
+	} else {
 		if (m_capture_source) {
 			old = m_capture_source;
 			m_capture_source = nullptr;
 		}
-		m_capture_name = "";
-	} else {
-		if (m_capture_name.empty() || m_capture_name != m_cfg->audio_source_name) {
-			if (m_capture_source) {
-				old = m_capture_source;
-				m_capture_source = nullptr;
-			}
-			m_capture_name = m_cfg->audio_source_name;
-			m_capture_check_time = os_gettime_ns() - 3000000000;
-		}
+		m_capture_check_time = os_gettime_ns() - 3000000000;
 	}
 
 	if (old) {
@@ -206,9 +184,18 @@ void obs_internal_source::update()
 		}
 		obs_weak_source_release(old);
 	}
+}
 
-	if (m_audio_buf_len != m_cfg->sample_size)
-		resize_audio_buf(m_cfg->sample_size);
+void obs_internal_source::update(obs_data_t *data)
+{
+	audio_source::update(data);
+	m_sample_rate = audio_output_get_sample_rate(obs_get_audio());
+	/* Usually the frame rate is used as a divisor, but
+     * it seems that rates below 60 result in a sample size that's too large
+     * and therefore will break the visualizer so I'll just use 60 as a constant here
+     */
+	m_sample_size = m_sample_rate / 60;
+	m_num_channels = audio_output_get_channels(obs_get_audio());
 }
 
 }

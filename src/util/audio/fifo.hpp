@@ -27,10 +27,10 @@ private:
 	bool open_fifo();
 
 public:
-	fifo(source::config *cfg);
+	fifo(obs_data_t *);
 	~fifo() override;
-	void update() override;
-	bool tick(float seconds) override;
+	void update(obs_data_t *) override;
+	bool tick(float) override;
 #else  /* Stubs on Windows */
 public:
 	fifo(source::config *cfg) : audio_source(cfg) {}
