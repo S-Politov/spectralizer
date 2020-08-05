@@ -64,6 +64,8 @@ class visualizer_source {
 	audio::audio_visualizer *m_visualizer = nullptr;
 	std::map<uint16_t, std::string> m_source_names;
 
+	std::mutex m_update_mutex;
+
 public:
 	visualizer_source(obs_source_t *source, obs_data_t *settings);
 	~visualizer_source();
@@ -72,6 +74,7 @@ public:
 	inline void tick(float seconds);
 	inline void render(gs_effect_t *effect);
 
+	audio::audio_visualizer *visualizer() { return m_visualizer; }
 	uint32_t get_width() const { return m_config.cx; }
 
 	uint32_t get_height() const { return m_config.cy; }

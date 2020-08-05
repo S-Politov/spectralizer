@@ -25,27 +25,12 @@
 
 namespace audio {
 spectrum_visualizer::spectrum_visualizer(obs_data_t *data)
-	: audio_visualizer(data),
-	  m_last_bar_count(0),
-	  m_fftw_results(0),
-	  m_fftw_input_left(nullptr),
-	  m_fftw_input_right(nullptr),
-	  m_fftw_output_left(nullptr),
-	  m_fftw_output_right(nullptr),
-	  m_fftw_plan_left(nullptr),
-	  m_fftw_plan_right(nullptr),
-	  m_silent_runs(0u)
+	: audio_visualizer(data), m_last_bar_count(0), m_silent_runs(0u)
 {
 	update(data);
 }
 
-spectrum_visualizer::~spectrum_visualizer()
-{
-	bfree(m_fftw_input_left);
-	bfree(m_fftw_input_right);
-	bfree(m_fftw_output_left);
-	bfree(m_fftw_output_right);
-}
+spectrum_visualizer::~spectrum_visualizer() {}
 
 void spectrum_visualizer::update(obs_data_t *data)
 {
@@ -72,8 +57,6 @@ void spectrum_visualizer::update(obs_data_t *data)
 		m_fftw_input_left = (double *)brealloc(m_fftw_input_left, sizeof(double) * m_source->sample_size());
 		m_fftw_input_right = (double *)brealloc(m_fftw_input_right, sizeof(double) * m_source->sample_size());
 	}
-	m_fftw_output_left = (fftw_complex *)brealloc(m_fftw_output_left, sizeof(fftw_complex) * m_fftw_results);
-	m_fftw_output_right = (fftw_complex *)brealloc(m_fftw_output_right, sizeof(fftw_complex) * m_fftw_results);
 }
 
 static bool filter_changed(obs_properties_t *props, obs_property_t *, obs_data_t *data)
@@ -149,92 +132,147 @@ void spectrum_visualizer::tick(float seconds)
 	}
 
 	audio_visualizer::tick(seconds);
+	auto *buf = m_source->buffer();
+	float scalar = (float)(1.0 / sqrt(m_fft_size));
+	for (unsigned int frame = 0; frame < m_source->buffer_size(); frame++) {
+		m_fftIn[0][m_fftBufW] = buf[frame].l;
+		m_fftIn[1][m_fftBufW] = buf[frame].r;
+		m_fftBufW = (m_fftBufW + 1) % m_fft_size;
 
-	bool is_silent_left = true, is_silent_right = true;
+		if (--m_fftBufP <= 0) {
+			if (true /* aka not silent */) {
+				memcpy(&m_fftTmpIn[0], &(m_fftIn[0])[m_fftBufW], (m_fft_size - m_fftBufW) * sizeof(float));
+				memcpy(&m_fftTmpIn[0], &(m_fftIn[1])[m_fftBufW], (m_fft_size - m_fftBufW) * sizeof(float));
+				memcpy(&m_fftTmpIn[m_fft_size - m_fftBufW], &m_fftIn[0][0], m_fftBufW * sizeof(float));
+				memcpy(&m_fftTmpIn[m_fft_size - m_fftBufW], &m_fftIn[1][0], m_fftBufW * sizeof(float));
 
-	if (m_stereo) {
-		is_silent_left = prepare_fft_input(m_source->buffer(), m_source->sample_size(), m_fftw_input_left, CM_LEFT);
-		is_silent_right = prepare_fft_input(m_source->buffer(), m_source->sample_size(), m_fftw_input_right, CM_RIGHT);
-	} else {
-		is_silent_left = prepare_fft_input(m_source->buffer(), m_source->sample_size(), m_fftw_input_left, CM_LEFT);
-	}
-
-	if (!(is_silent_left && is_silent_right)) {
-		m_silent_runs = 0;
-	} else {
-		++m_silent_runs;
-	}
-
-	/* TODO make this a constant */
-	if (m_silent_runs < 30) {
-		auto height = m_bar_height;
-		double grav = 1 - m_gravity;
-		m_fftw_plan_left =
-			fftw_plan_dft_r2c_1d(m_source->sample_size(), m_fftw_input_left, m_fftw_output_left, FFTW_ESTIMATE);
-		if (!m_fftw_plan_left)
-			return;
-		if (m_stereo) {
-			m_fftw_plan_right =
-				fftw_plan_dft_r2c_1d(m_source->sample_size(), m_fftw_input_right, m_fftw_output_right, FFTW_ESTIMATE);
-			if (!m_fftw_plan_right) {
-				fftw_destroy_plan(m_fftw_plan_left);
-				return;
-			}
-			fftw_execute(m_fftw_plan_right);
-			height /= 2;
-		}
-
-		fftw_execute(m_fftw_plan_left);
-
-		create_spectrum_bars(m_fftw_output_left, m_fftw_results, height, m_detail + DEAD_BAR_OFFSET, &m_bars_left_new,
-							 &m_bars_falloff_left);
-		if (m_stereo) {
-			create_spectrum_bars(m_fftw_output_right, m_fftw_results, height, m_detail + DEAD_BAR_OFFSET,
-								 &m_bars_right_new, &m_bars_falloff_right);
-
-			m_bars_right.resize(m_bars_right_new.size(), 0.0);
-			for (size_t i = 0; i < m_bars_right.size(); i++) {
-				m_bars_right[i] = m_bars_right[i] * m_gravity + m_bars_right_new[i] * grav;
+				for (int iBin = 0; iBin < m_fft_size; ++iBin) {
+					float lx0 = (m_fftOut[0])[iBin];
+					float rx0 = (m_fftOut[1])[iBin];
+					float x1 =
+						m_fftTmpOut[iBin].r * m_fftTmpOut[iBin].r + m_fftTmpOut[iBin].i * m_fftTmpOut[iBin].i * scalar;
+					lx0 = x1 + m_kfft[(x1 < lx0)] * (lx0 - x1);
+					rx0 = x1 + m_kfft[(x1 < rx0)] * (rx0 - x1);
+					m_fftOut[0][iBin] = lx0;
+					m_fftOut[1][iBin] = rx0;
+				}
+				m_fftBufP = m_fft_size - m_fft_overlap;
+			} else {
 			}
 		}
-
-		m_bars_left.resize(m_bars_left_new.size(), 0.0);
-		for (size_t i = 0; i < m_bars_left.size(); i++) {
-			m_bars_left[i] = m_bars_left[i] * m_gravity + m_bars_left_new[i] * grav;
-		}
-
-		fftw_destroy_plan(m_fftw_plan_left);
-		if (m_stereo)
-			fftw_destroy_plan(m_fftw_plan_right);
-	} else {
-		m_sleeping = true;
-	}
-}
-
-bool spectrum_visualizer::prepare_fft_input(pcm_stereo_sample *buffer, uint32_t sample_size, double *fftw_input,
-											channel_mode channel_mode)
-{
-	bool is_silent = true;
-
-	for (auto i = 0u; i < sample_size; ++i) {
-		switch (channel_mode) {
-		case CM_LEFT:
-			fftw_input[i] = buffer[i].l;
-			break;
-		case CM_RIGHT:
-			fftw_input[i] = buffer[i].r;
-			break;
-		case CM_BOTH:
-			fftw_input[i] = buffer[i].l + buffer[i].r;
-			break;
-		}
-
-		if (is_silent && fftw_input[i] > 0)
-			is_silent = false;
 	}
 
-	return is_silent;
+	/* Integrate FFT results into log-scale frequency bands */
+	const float df = (float)m_source->sample_rate() / m_fft_size;
+	scalar = 2.0f / (float)m_source->sample_rate();
+	for (int chan = 0; chan < 2; chan++) {
+		memset(m_bandOut[chan], 0, m_bands * sizeof(float));
+		int iBin = 0, iBand = 0;
+		float f0 = 0.0f;
+
+		while (iBin <= (m_fft_size / 2) && iBand < m_bands) {
+			float fLin1 = ((float)iBin + 0.5f);
+			float fLog1 = m_bandFreq[iBand];
+			float x = m_fftOut[chan][iBin];
+			float &y = m_bandOut[chan][iBand];
+
+			if (fLin1 <= fLog1) {
+				y += (fLin1 - f0) * x * scalar;
+				f0 = fLin1;
+				iBin++;
+			} else {
+				y += (fLog1 - f0) * x * scalar;
+				f0 = fLog1;
+				iBand += 1;
+			}
+		}
+	}
+
+	//    bool is_silent_left = true, is_silent_right = true;
+
+	//    if (m_stereo) {
+	//        is_silent_left = prepare_fft_input(m_source->buffer(), m_source->sample_size(), m_fftw_input_left, CM_LEFT);
+	//        is_silent_right = prepare_fft_input(m_source->buffer(), m_source->sample_size(), m_fftw_input_right, CM_RIGHT);
+	//    } else {
+	//        is_silent_left = prepare_fft_input(m_source->buffer(), m_source->sample_size(), m_fftw_input_left, CM_LEFT);
+	//    }
+
+	//    if (!(is_silent_left && is_silent_right)) {
+	//        m_silent_runs = 0;
+	//    } else {
+	//        ++m_silent_runs;
+	//    }
+
+	//    /* TODO make this a constant */
+	//    if (m_silent_runs < 30) {
+	//        auto height = m_bar_height;
+	//        double grav = 1 - m_gravity;
+	//        m_fftw_plan_left =
+	//            fftw_plan_dft_r2c_1d(m_source->sample_size(), m_fftw_input_left, m_fftw_output_left, FFTW_ESTIMATE);
+	//        if (!m_fftw_plan_left)
+	//            return;
+	//        if (m_stereo) {
+	//            m_fftw_plan_right =
+	//                fftw_plan_dft_r2c_1d(m_source->sample_size(), m_fftw_input_right, m_fftw_output_right, FFTW_ESTIMATE);
+	//            if (!m_fftw_plan_right) {
+	//                fftw_destroy_plan(m_fftw_plan_left);
+	//                return;
+	//            }
+	//            fftw_execute(m_fftw_plan_right);
+	//            height /= 2;
+	//        }
+
+	//        fftw_execute(m_fftw_plan_left);
+
+	//        create_spectrum_bars(m_fftw_output_left, m_fftw_results, height, m_detail + DEAD_BAR_OFFSET, &m_bars_left_new,
+	//                             &m_bars_falloff_left);
+	//        if (m_stereo) {
+	//            create_spectrum_bars(m_fftw_output_right, m_fftw_results, height, m_detail + DEAD_BAR_OFFSET,
+	//                                 &m_bars_right_new, &m_bars_falloff_right);
+
+	//            m_bars_right.resize(m_bars_right_new.size(), 0.0);
+	//            for (size_t i = 0; i < m_bars_right.size(); i++) {
+	//                m_bars_right[i] = m_bars_right[i] * m_gravity + m_bars_right_new[i] * grav;
+	//            }
+	//        }
+
+	//        m_bars_left.resize(m_bars_left_new.size(), 0.0);
+	//        for (size_t i = 0; i < m_bars_left.size(); i++) {
+	//            m_bars_left[i] = m_bars_left[i] * m_gravity + m_bars_left_new[i] * grav;
+	//        }
+
+	//        fftw_destroy_plan(m_fftw_plan_left);
+	//        if (m_stereo)
+	//            fftw_destroy_plan(m_fftw_plan_right);
+	//    } else {
+	//        m_sleeping = true;
+	//    }
 }
+
+//bool spectrum_visualizer::prepare_fft_input(pcm_stereo_sample *buffer, uint32_t sample_size, double *fftw_input,
+//                                            channel_mode channel_mode)
+//{
+//    bool is_silent = true;
+
+//    for (auto i = 0u; i < sample_size; ++i) {
+//        switch (channel_mode) {
+//        case CM_LEFT:
+//            fftw_input[i] = buffer[i].l;
+//            break;
+//        case CM_RIGHT:
+//            fftw_input[i] = buffer[i].r;
+//            break;
+//        case CM_BOTH:
+//            fftw_input[i] = buffer[i].l + buffer[i].r;
+//            break;
+//        }
+
+//        if (is_silent && fftw_input[i] > 0)
+//            is_silent = false;
+//    }
+
+//    return is_silent;
+//}
 
 void spectrum_visualizer::smooth_bars(doublev *bars)
 {
@@ -412,30 +450,30 @@ void spectrum_visualizer::maybe_reset_scaling_window(double current_max_height, 
 	}
 }
 
-void spectrum_visualizer::create_spectrum_bars(fftw_complex *fftw_output, size_t fftw_results, int32_t win_height,
-											   uint32_t number_of_bars, doublev *bars, doublev *bars_falloff)
-{
-	// cut off frequencies only have to be re-calculated if number of bars
-	// change
-	if (m_last_bar_count != number_of_bars) {
-		recalculate_cutoff_frequencies(number_of_bars, &m_low_cutoff_frequencies, &m_high_cutoff_frequencies,
-									   &m_frequency_constants_per_bin);
-		m_last_bar_count = number_of_bars;
-	}
+//void spectrum_visualizer::create_spectrum_bars(fftw_complex *fftw_output, size_t fftw_results, int32_t win_height,
+//                                               uint32_t number_of_bars, doublev *bars, doublev *bars_falloff)
+//{
+//    // cut off frequencies only have to be re-calculated if number of bars
+//    // change
+//    if (m_last_bar_count != number_of_bars) {
+//        recalculate_cutoff_frequencies(number_of_bars, &m_low_cutoff_frequencies, &m_high_cutoff_frequencies,
+//                                       &m_frequency_constants_per_bin);
+//        m_last_bar_count = number_of_bars;
+//    }
 
-	// Separate the frequency spectrum into bars, the number of bars is based on
-	// screen width
-	generate_bars(number_of_bars, fftw_results, m_low_cutoff_frequencies, m_high_cutoff_frequencies, fftw_output, bars);
+//    // Separate the frequency spectrum into bars, the number of bars is based on
+//    // screen width
+//    generate_bars(number_of_bars, fftw_results, m_low_cutoff_frequencies, m_high_cutoff_frequencies, fftw_output, bars);
 
-	// smoothing
-	smooth_bars(bars);
+//    // smoothing
+//    smooth_bars(bars);
 
-	// scale bars
-	scale_bars(win_height, bars);
+//    // scale bars
+//    scale_bars(win_height, bars);
 
-	// falloff, save values for next falloff run
-	apply_falloff(*bars, bars_falloff);
-}
+//    // falloff, save values for next falloff run
+//    apply_falloff(*bars, bars_falloff);
+//}
 
 void spectrum_visualizer::recalculate_cutoff_frequencies(uint32_t number_of_bars, uint32v *low_cutoff_frequencies,
 														 uint32v *high_cutoff_frequencies, doublev *freqconst_per_bin)
@@ -465,26 +503,26 @@ void spectrum_visualizer::recalculate_cutoff_frequencies(uint32_t number_of_bars
 	}
 }
 
-void spectrum_visualizer::generate_bars(uint32_t number_of_bars, size_t fftw_results,
-										const uint32v &low_cutoff_frequencies, const uint32v &high_cutoff_frequencies,
-										const fftw_complex *fftw_output, doublev *bars) const
-{
-	if (bars->size() != number_of_bars) {
-		bars->resize(number_of_bars, 0.0);
-	}
+//void spectrum_visualizer::generate_bars(uint32_t number_of_bars, size_t fftw_results,
+//                                        const uint32v &low_cutoff_frequencies, const uint32v &high_cutoff_frequencies,
+//                                        const fftw_complex *fftw_output, doublev *bars) const
+//{
+//    if (bars->size() != number_of_bars) {
+//        bars->resize(number_of_bars, 0.0);
+//    }
 
-	for (auto i = 0u; i < number_of_bars; i++) {
-		double freq_magnitude = 0.0;
-		for (auto cutoff_freq = low_cutoff_frequencies[i];
-			 cutoff_freq <= high_cutoff_frequencies[i] && cutoff_freq < fftw_results; ++cutoff_freq) {
-			freq_magnitude += std::sqrt((fftw_output[cutoff_freq][0] * fftw_output[cutoff_freq][0]) +
-										(fftw_output[cutoff_freq][1] * fftw_output[cutoff_freq][1]));
-		}
-		(*bars)[i] = freq_magnitude / (high_cutoff_frequencies[i] - low_cutoff_frequencies[i] + 1);
+//    for (auto i = 0u; i < number_of_bars; i++) {
+//        double freq_magnitude = 0.0;
+//        for (auto cutoff_freq = low_cutoff_frequencies[i];
+//             cutoff_freq <= high_cutoff_frequencies[i] && cutoff_freq < fftw_results; ++cutoff_freq) {
+//            freq_magnitude += std::sqrt((fftw_output[cutoff_freq][0] * fftw_output[cutoff_freq][0]) +
+//                                        (fftw_output[cutoff_freq][1] * fftw_output[cutoff_freq][1]));
+//        }
+//        (*bars)[i] = freq_magnitude / (high_cutoff_frequencies[i] - low_cutoff_frequencies[i] + 1);
 
-		/* boost high freqs */
-		(*bars)[i] *= (std::log2(2 + i) * (100.f / number_of_bars));
-		(*bars)[i] = std::pow((*bars)[i], 0.5);
-	}
-}
+//        /* boost high freqs */
+//        (*bars)[i] *= (std::log2(2 + i) * (100.f / number_of_bars));
+//        (*bars)[i] = std::pow((*bars)[i], 0.5);
+//    }
+//}
 }

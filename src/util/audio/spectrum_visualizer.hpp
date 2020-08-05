@@ -19,7 +19,7 @@
 #pragma once
 #include "../util.hpp"
 #include "audio_visualizer.hpp"
-#include <fftw3.h>
+#include <kiss_fftr.h>
 #include <vector>
 
 #define DEAD_BAR_OFFSET 5 /* The last five bars seem to always be silent, so we cut them off */
@@ -32,6 +32,22 @@ namespace audio {
 
 class spectrum_visualizer : public audio_visualizer {
 protected:
+	size_t m_fft_size, m_fft_overlap, m_bands, m_fft_idx, m_band_idx;
+	double m_freq_min, m_freq_max, m_gain_peak, m_gain_rms, m_sens;
+	int m_env_peak[2], m_env_rms[2], m_env_fft[2];
+	float m_kfft[2], m_kpeak[2], m_kRMS[2];
+	kiss_fftr_cfg m_fftCfg[MAX_AUDIO_CHANNELS]; // FFT states for each channel
+	float *m_fftIn[MAX_AUDIO_CHANNELS];         // buffer for each channel's FFT input
+	float *m_fftOut[MAX_AUDIO_CHANNELS];        // buffer for each channel's FFT output
+	float *m_fftKWdw;                           // window function coefficients
+	float *m_fftTmpIn;                          // temp FFT processing buffer
+	float *m_bandFreq;                          // buffer of band max frequencies
+	float *m_bandOut[MAX_AUDIO_CHANNELS];       // buffer of band values
+	kiss_fft_cpx *m_fftTmpOut;                  // temp FFT processing buffer
+	int m_fftBufW;                              // write index for input ring buffers
+	int m_fftBufP;
+
+	/*-------*/
 	uint32_t m_last_bar_count;
 	bool m_sleeping = false, m_stereo = false, m_auto_scale = false;
 	float m_sleep_count = 0.f;
@@ -55,12 +71,6 @@ protected:
 	double *m_fftw_input_left;
 	double *m_fftw_input_right;
 
-	fftw_complex *m_fftw_output_left;
-	fftw_complex *m_fftw_output_right;
-
-	fftw_plan m_fftw_plan_left;
-	fftw_plan m_fftw_plan_right;
-
 	/* Frequency cutoff variables */
 	uint32v m_low_cutoff_frequencies;
 	uint32v m_high_cutoff_frequencies;
@@ -68,14 +78,14 @@ protected:
 
 	uint64_t m_silent_runs; /* determines sleep state */
 
-	bool prepare_fft_input(pcm_stereo_sample *buffer, uint32_t sample_size, double *fftw_input,
-						   channel_mode channel_mode);
+	//    bool prepare_fft_input(pcm_stereo_sample *buffer, uint32_t sample_size, double *fftw_input,
+	//                           channel_mode channel_mode);
 
-	void create_spectrum_bars(fftw_complex *fftw_output, size_t fftw_results, int32_t win_height,
-							  uint32_t number_of_bars, doublev *bars, doublev *bars_falloff);
+	//    void create_spectrum_bars(fftw_complex *fftw_output, size_t fftw_results, int32_t win_height,
+	//                              uint32_t number_of_bars, doublev *bars, doublev *bars_falloff);
 
-	void generate_bars(uint32_t number_of_bars, size_t fftw_results, const uint32v &low_cutoff_frequencies,
-					   const uint32v &high_cutoff_frequencies, const fftw_complex *fftw_output, doublev *bars) const;
+	//    void generate_bars(uint32_t number_of_bars, size_t fftw_results, const uint32v &low_cutoff_frequencies,
+	//                       const uint32v &high_cutoff_frequencies, const fftw_complex *fftw_output, doublev *bars) const;
 
 	void recalculate_cutoff_frequencies(uint32_t number_of_bars, uint32v *low_cutoff_frequencies,
 										uint32v *high_cutoff_frequencies, doublev *freqconst_per_bin);

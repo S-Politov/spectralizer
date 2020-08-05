@@ -46,9 +46,9 @@ visualizer_source::~visualizer_source()
 
 void visualizer_source::update(obs_data_t *settings)
 {
+	m_update_mutex.lock();
 	visual_mode old_mode = m_config.visual;
 
-	m_config.value_mutex.lock();
 	m_config.visual = (visual_mode)(obs_data_get_int(settings, S_SOURCE_MODE));
 	m_config.color = obs_data_get_int(settings, S_COLOR);
 	m_config.fifo_path = obs_data_get_string(settings, S_FIFO_PATH);
@@ -83,24 +83,24 @@ void visualizer_source::update(obs_data_t *settings)
 		m_visualizer->update(settings);
 	}
 
-	m_config.value_mutex.unlock();
+	m_update_mutex.unlock();
 }
 
 void visualizer_source::tick(float seconds)
 {
-	m_config.value_mutex.lock();
+	m_update_mutex.lock();
 
 	if (m_visualizer)
 		m_visualizer->tick(seconds);
 
-	m_config.value_mutex.unlock();
+	m_update_mutex.unlock();
 }
 
 void visualizer_source::render(gs_effect_t *effect)
 {
 	UNUSED_PARAMETER(effect);
 	if (m_visualizer) {
-		m_config.value_mutex.lock();
+		m_update_mutex.lock();
 		gs_effect_t *solid = obs_get_base_effect(OBS_EFFECT_SOLID);
 		gs_eparam_t *color = gs_effect_get_param_by_name(solid, "color");
 		gs_technique_t *tech = gs_effect_get_technique(solid, "Solid");
@@ -116,7 +116,7 @@ void visualizer_source::render(gs_effect_t *effect)
 
 		gs_technique_end_pass(tech);
 		gs_technique_end(tech);
-		m_config.value_mutex.unlock();
+		m_update_mutex.unlock();
 	}
 }
 
@@ -145,9 +145,10 @@ static bool visual_mode_changed(obs_properties_t *props, obs_property_t *, obs_d
 
 obs_properties_t *get_properties_for_visualiser(void *data)
 {
-	UNUSED_PARAMETER(data);
+	auto *vis = reinterpret_cast<visualizer_source *>(data);
 	obs_properties_t *props = obs_properties_create();
 
+	vis->visualizer()->properties(props);
 	auto *mode =
 		obs_properties_add_list(props, S_SOURCE_MODE, T_SOURCE_MODE, OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
 	obs_property_list_add_int(mode, T_MODE_BARS, (int)VM_BARS);

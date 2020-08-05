@@ -55,6 +55,7 @@ public:
 	virtual void resize_buffer();
 	virtual void source_changed() = 0;
 	virtual void properties(obs_properties_t *props);
+	long long buffer_size();
 	pcm_stereo_sample *buffer() { return m_buffer; }
 };
 }

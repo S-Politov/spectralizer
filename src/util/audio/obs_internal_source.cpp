@@ -89,31 +89,13 @@ bool obs_internal_source::tick(float)
      * and is technically only finished, once the circle buffer is
      * filled, but we'll just assume that's always the case */
 
-	/* Update / refresh audio capturing */
-	std::string new_name = "";
-	if (!m_capture_name.empty() && !m_capture_source) {
-		uint64_t t = os_gettime_ns();
-
-		if (t - m_capture_check_time > 3000000000) {
-			new_name = m_capture_name;
+	/* Update / refresh audio capturing every now and then to check if the source
+     * (still) exists */
+	if (!m_source_id.empty() && !m_capture_source) {
+		auto t = os_gettime_ns();
+		if (t - m_capture_check_time > 3e9) {
 			m_capture_check_time = t;
-		}
-	}
-
-	if (!new_name.empty()) {
-		obs_source_t *capture = obs_get_source_by_name(new_name.c_str());
-		obs_weak_source_t *weak_capture = capture ? obs_source_get_weak_source(capture) : NULL;
-
-		if (!m_capture_name.empty() && new_name == m_capture_name) {
-			m_capture_source = weak_capture;
-			weak_capture = nullptr;
-		}
-
-		if (capture) {
-			info("Added audio capture to '%s'", obs_source_get_name(capture));
-			obs_source_add_audio_capture_callback(capture, audio_capture, this);
-			obs_weak_source_release(weak_capture);
-			obs_source_release(capture);
+			source_changed();
 		}
 	}
 
@@ -124,7 +106,14 @@ bool obs_internal_source::tick(float)
 		return false;
 	}
 
-	if (m_audio_data[0].size < data_size) {
+	bool inactive = false;
+	auto *src = obs_weak_source_get_source(m_capture_source);
+	if (src && !obs_source_active(src)) {
+		obs_source_release(src);
+		inactive = true;
+	}
+
+	if (m_audio_data[0].size < data_size || inactive) {
 		/* Clear buffers */
 		memset(m_audio_buf[0], 0, data_size);
 		memset(m_audio_buf[1], 0, data_size);
@@ -167,12 +156,9 @@ void obs_internal_source::source_changed()
 	if (m_source_id.empty() && m_capture_source) {
 		old = m_capture_source;
 		m_capture_source = nullptr;
-	} else {
-		if (m_capture_source) {
-			old = m_capture_source;
-			m_capture_source = nullptr;
-		}
-		m_capture_check_time = os_gettime_ns() - 3000000000;
+	} else if (m_capture_source) {
+		old = m_capture_source;
+		m_capture_source = nullptr;
 	}
 
 	if (old) {
@@ -183,6 +169,18 @@ void obs_internal_source::source_changed()
 			obs_source_release(old_source);
 		}
 		obs_weak_source_release(old);
+	}
+
+	if (!m_source_id.empty()) {
+		obs_source_t *capture = obs_get_source_by_name(m_source_id.c_str());
+		obs_weak_source_t *weak_capture = capture ? obs_source_get_weak_source(capture) : NULL;
+
+		if (capture) {
+			info("Added audio capture to '%s'", obs_source_get_name(capture));
+			obs_source_add_audio_capture_callback(capture, audio_capture, this);
+			obs_source_release(capture);
+			m_capture_source = weak_capture;
+		}
 	}
 }
 

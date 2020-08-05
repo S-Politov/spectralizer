@@ -64,6 +64,12 @@ void audio_visualizer::update(obs_data_t *data)
 	}
 }
 
+void audio_visualizer::properties(obs_properties_t *props)
+{
+	if (m_source)
+		m_source->properties(props);
+}
+
 void audio_visualizer::tick(float seconds)
 {
 	if (m_source)

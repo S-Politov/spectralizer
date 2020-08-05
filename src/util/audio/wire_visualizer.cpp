@@ -39,6 +39,7 @@ void wire_visualizer::update(obs_data_t *data)
 
 void wire_visualizer::properties(obs_properties_t *props)
 {
+	audio_visualizer::properties(props);
 	/* Wire settings */
 	auto *wm = obs_properties_add_list(props, S_WIRE_MODE, T_WIRE_MODE, OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
 	auto *th = obs_properties_add_int(props, S_WIRE_THICKNESS, T_WIRE_THICKNESS, 2, 0xffff, 1);

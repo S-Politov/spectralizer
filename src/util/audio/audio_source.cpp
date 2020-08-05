@@ -16,7 +16,7 @@ static bool add_source(void *data, obs_source_t *src)
 	return true;
 }
 
-static bool source_changed(obs_properties_t *props, obs_property_t *, obs_data_t *data)
+static bool source_selected(obs_properties_t *props, obs_property_t *, obs_data_t *data)
 {
 	auto *id = obs_data_get_string(data, S_AUDIO_SOURCE);
 	auto *sr = obs_properties_get(props, S_SAMPLE_RATE);
@@ -37,7 +37,7 @@ void audio_source::properties(obs_properties_t *props)
 {
 	auto *src =
 		obs_properties_add_list(props, S_AUDIO_SOURCE, T_AUDIO_SOURCE, OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
-	obs_property_set_modified_callback(src, source_changed);
+	obs_property_set_modified_callback(src, source_selected);
 
 	obs_properties_add_color(props, S_COLOR, T_COLOR);
 
@@ -58,6 +58,11 @@ void audio_source::resize_buffer()
 	if (m_buffer)
 		bfree(m_buffer);
 	m_buffer = static_cast<pcm_stereo_sample *>(bzalloc(m_sample_size * sizeof(pcm_stereo_sample)));
+}
+
+long long audio_source::buffer_size()
+{
+	return m_sample_size;
 }
 
 void audio_source::update(obs_data_t *d)

@@ -52,6 +52,6 @@ public:
 
 	virtual void render(gs_effect_t *) = 0;
 
-	virtual void properties(obs_properties_t *) = 0;
+	virtual void properties(obs_properties_t *);
 };
 }
